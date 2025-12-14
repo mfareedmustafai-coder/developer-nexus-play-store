@@ -35,6 +35,21 @@
         .file-upload:hover { border-color: #00d4ff; }
         .preview-img { height: 50px; margin-bottom: 10px; display: none; object-fit: contain; }
 
+        /* GUIDELINE BOX */
+        .guideline-box {
+            background: rgba(0, 200, 81, 0.1);
+            border: 1px solid #00c851;
+            color: #00c851;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            line-height: 1.5;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         /* MY APPS LIST */
         .app-card { background: #1b1e26; padding: 15px; border-radius: 10px; display: flex; align-items: center; margin-bottom: 10px; border: 1px solid #333; }
         .app-card img { width: 50px; height: 50px; border-radius: 10px; object-fit: cover; margin-right: 15px; }
@@ -81,7 +96,6 @@
             <div class="menu-item" onclick="window.showView('myapps')">
                 <i class="fas fa-list"></i> My Apps
             </div>
-            <!-- NEW PROFILE OPTION -->
             <div class="menu-item" onclick="window.showView('profile')">
                 <i class="fas fa-user-cog"></i> Profile Settings
             </div>
@@ -97,6 +111,13 @@
             <!-- VIEW: SUBMIT / EDIT -->
             <div id="view-submit">
                 <h1 id="form-title">Submit App</h1>
+                
+                <!-- GUIDELINE NOTIFICATION -->
+                <div class="guideline-box">
+                    <i class="fas fa-check-circle" style="font-size:20px;"></i>
+                    <span>When you publish the app, it will be reviewed by an admin, and when the admin reviews it, your app will be published.</span>
+                </div>
+
                 <div style="background:#1b1e26; padding:30px; border-radius:15px; max-width:600px;">
                     <label>App Name</label>
                     <input type="text" id="appName" placeholder="e.g. My Awesome Game">
@@ -147,16 +168,14 @@
                 <div id="my-apps-list">Loading...</div>
             </div>
 
-            <!-- VIEW: PROFILE SETTINGS (NEW) -->
+            <!-- VIEW: PROFILE SETTINGS -->
             <div id="view-profile" style="display:none;">
                 <h1>Profile Settings</h1>
                 <div style="background:#1b1e26; padding:30px; border-radius:15px; max-width:500px;">
                     <label>Developer / Studio Name</label>
                     <input type="text" id="edit-dev-name" placeholder="Enter new name">
-                    
                     <label>Email Address (Read Only)</label>
                     <input type="text" id="edit-dev-email" disabled style="opacity:0.6; cursor:not-allowed;">
-                    
                     <button class="btn" onclick="window.saveDevProfile()" style="margin-top:20px;">SAVE CHANGES</button>
                 </div>
             </div>
@@ -185,8 +204,7 @@
         const db = getDatabase(app);
         
         let currentUser = null;
-        let editingId = null; 
-        let editingPath = null; 
+        let editingLiveId = null; // Contains ID of LIVE app if editing
         let myAppsData = {}; 
 
         // AUTH LOGIC
@@ -195,20 +213,16 @@
                 currentUser = u;
                 document.getElementById('auth-screen').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'flex';
-                updateProfileDisplay(u);
+                document.getElementById('dev-name-display').innerText = u.displayName || "Developer";
+                // Profile View Data
+                document.getElementById('edit-dev-name').value = u.displayName || "";
+                document.getElementById('edit-dev-email').value = u.email || "";
                 loadMyApps();
             } else {
                 document.getElementById('auth-screen').style.display = 'flex';
                 document.getElementById('dashboard').style.display = 'none';
             }
         });
-
-        function updateProfileDisplay(u) {
-            document.getElementById('dev-name-display').innerText = u.displayName || "Developer";
-            // Populate Profile Settings Form
-            document.getElementById('edit-dev-name').value = u.displayName || "";
-            document.getElementById('edit-dev-email').value = u.email || "";
-        }
 
         window.toggleAuth = () => {
             const l = document.getElementById('login-form');
@@ -233,21 +247,18 @@
             event.currentTarget.classList.add('active');
         };
 
-        // --- PROFILE FUNCTIONS ---
         window.saveDevProfile = () => {
             const newName = document.getElementById('edit-dev-name').value;
             if(!newName) return alert("Name cannot be empty");
-
             updateProfile(currentUser, { displayName: newName }).then(() => {
                 alert("Profile Updated Successfully!");
-                updateProfileDisplay(currentUser);
+                document.getElementById('dev-name-display').innerText = newName;
             }).catch(e => alert("Error: " + e.message));
         };
 
         // --- LOAD MY APPS ---
         function loadMyApps() {
             if(!currentUser) return;
-            
             onValue(ref(db, 'pending_apps'), s1 => {
                 const pending = s1.val() || {};
                 onValue(ref(db, 'games'), s2 => {
@@ -263,7 +274,6 @@
             myAppsData = {}; 
 
             const myItems = [];
-            
             Object.entries(pending).forEach(([k,v]) => {
                 if(v.developerId === currentUser.uid) myItems.push({...v, id:k, dbPath:'pending_apps', status:'Pending'});
             });
@@ -276,7 +286,6 @@
             myItems.forEach(app => {
                 myAppsData[app.id] = app;
                 const statusClass = app.status === 'Live' ? 'status-live' : 'status-pending';
-                
                 list.innerHTML += `
                     <div class="app-card">
                         <img src="${app.logo}" onerror="this.src='https://via.placeholder.com/50'">
@@ -301,6 +310,7 @@
         window.addScField = () => { const d=document.createElement('div'); d.innerHTML=`<input type="file" class="sc-file" accept="image/*" onchange="window.handleSc(this)" style="margin-bottom:5px">`; document.getElementById('sc-container').appendChild(d); };
         window.handleSc = async (i) => { if(i.files[0]){const b=await compress(i.files[0]);i.setAttribute('data-b64', b); i.style.border="1px solid #00d4ff";}};
 
+        // --- SUBMIT / UPDATE LOGIC (MODIFIED FOR REVIEW) ---
         window.submitForReview = () => {
             const data = {
                 name: document.getElementById('appName').value,
@@ -315,40 +325,53 @@
                 desc: document.getElementById('appDesc').value,
                 developer: currentUser.displayName,
                 developerId: currentUser.uid,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                status: "Pending" // Always pending first
             };
 
             const screenshots = [];
             document.querySelectorAll('.sc-file').forEach(i => { const v=i.getAttribute('data-b64'); if(v) screenshots.push(v); });
             if(screenshots.length > 0) data.screenshots = screenshots;
-            
-            if(editingId && screenshots.length===0 && myAppsData[editingId].screenshots) {
-                data.screenshots = myAppsData[editingId].screenshots;
+
+            // If we are editing a LIVE app, we must NOT update the live app directly.
+            // We must create a pending request with a reference to the live app.
+            if(editingLiveId) {
+                data.originalId = editingLiveId; // Tell admin this is an update to existing app
+                data.requestType = "Update";
+                // Keep old screenshots if new not provided
+                if(screenshots.length===0 && myAppsData[editingLiveId].screenshots) {
+                    data.screenshots = myAppsData[editingLiveId].screenshots;
+                }
+            } else {
+                data.requestType = "New";
             }
 
             if(!data.name || !data.download) return alert("Missing required fields");
 
-            if(editingId) {
-                data.status = myAppsData[editingId].status; 
-                update(ref(db, `${editingPath}/${editingId}`), data).then(() => {
-                    alert("App Updated!");
-                    window.resetForm();
-                    loadMyApps();
-                });
-            } else {
-                data.status = "Pending";
-                push(ref(db, 'pending_apps'), data).then(() => {
-                    alert("Submitted for Review!");
-                    window.resetForm();
-                    loadMyApps();
-                });
-            }
+            // ALWAYS push to pending_apps
+            push(ref(db, 'pending_apps'), data).then(() => {
+                alert("App submitted for Admin Review.");
+                window.resetForm();
+                loadMyApps();
+            });
         };
 
         window.editApp = (id) => {
             const app = myAppsData[id];
-            editingId = id;
-            editingPath = app.dbPath;
+            
+            // If the app is LIVE, we set editingLiveId so we know it's an update request
+            // If the app is PENDING, we are just updating the request itself (advanced, but for now treat as new submission or simplified edit)
+            // Simplified: Treat all edits as populating form.
+            
+            if(app.status === 'Live') {
+                editingLiveId = id;
+            } else {
+                // If it's already pending, we can ideally update the pending record, 
+                // but for simplicity, we'll delete old pending and create new to avoid duplicates or complex logic
+                if(confirm("To edit a pending app, we will cancel the current request and submit a new one. Continue?")) {
+                    remove(ref(db, `pending_apps/${id}`));
+                } else return;
+            }
 
             document.getElementById('appName').value = app.name;
             document.getElementById('appType').value = app.type || 'Game';
@@ -366,8 +389,8 @@
             document.getElementById('appLink').value = app.download;
             document.getElementById('appDesc').value = app.desc;
 
-            document.getElementById('form-title').innerText = "Edit App";
-            document.getElementById('btn-action').innerText = "UPDATE APP";
+            document.getElementById('form-title').innerText = "Edit App (Submit for Review)";
+            document.getElementById('btn-action').innerText = "SUBMIT UPDATE";
             document.getElementById('btn-cancel').style.display = 'inline-block';
             window.showView('submit');
         };
@@ -379,8 +402,7 @@
         };
 
         window.resetForm = () => {
-            editingId = null;
-            editingPath = null;
+            editingLiveId = null;
             document.querySelectorAll('input, textarea').forEach(i=>i.value="");
             document.getElementById('iconPreview').style.display='none';
             document.getElementById('sc-container').innerHTML="";
@@ -388,6 +410,7 @@
             document.getElementById('btn-action').innerText = "SUBMIT FOR REVIEW";
             document.getElementById('btn-cancel').style.display = 'none';
         };
+
     </script>
 </body>
 </html>
