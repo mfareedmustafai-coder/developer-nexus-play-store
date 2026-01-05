@@ -35,21 +35,6 @@
         .file-upload:hover { border-color: #00d4ff; }
         .preview-img { height: 50px; margin-bottom: 10px; display: none; object-fit: contain; }
 
-        /* GUIDELINE BOX */
-        .guideline-box {
-            background: rgba(0, 200, 81, 0.1);
-            border: 1px solid #00c851;
-            color: #00c851;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 13px;
-            line-height: 1.5;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
         /* MY APPS LIST */
         .app-card { background: #1b1e26; padding: 15px; border-radius: 10px; display: flex; align-items: center; margin-bottom: 10px; border: 1px solid #333; }
         .app-card img { width: 50px; height: 50px; border-radius: 10px; object-fit: cover; margin-right: 15px; }
@@ -112,12 +97,6 @@
             <!-- VIEW: SUBMIT / EDIT -->
             <div id="view-submit">
                 <h1 id="form-title">Submit App</h1>
-                
-                <div class="guideline-box">
-                    <i class="fas fa-check-circle" style="font-size:20px;"></i>
-                    <span>When you submit your app here, it will go to the Admin for review. If the Admin approves it, your app will be published on the Nexus Play Store.</span>
-                </div>
-
                 <div style="background:#1b1e26; padding:30px; border-radius:15px; max-width:600px;">
                     <label>App Name</label>
                     <input type="text" id="appName" placeholder="e.g. My Awesome Game">
@@ -239,7 +218,6 @@
         };
         window.logout = () => signOut(auth);
 
-        // NAVIGATION
         window.showView = (id) => {
             ['submit','myapps', 'profile'].forEach(v => document.getElementById('view-'+v).style.display='none');
             document.getElementById('view-'+id).style.display='block';
@@ -256,9 +234,10 @@
             }).catch(e => alert("Error: " + e.message));
         };
 
-        // LOAD DATA
+        // --- LOAD MY APPS (With Rejected Handling) ---
         function loadMyApps() {
             if(!currentUser) return;
+            
             onValue(ref(db, 'pending_apps'), s1 => {
                 const pending = s1.val() || {};
                 onValue(ref(db, 'games'), s2 => {
@@ -274,13 +253,19 @@
             myAppsData = {}; 
 
             const myItems = [];
-            Object.entries(pending).forEach(([k,v]) => { if(v.developerId === currentUser.uid) myItems.push({...v, id:k, dbPath:'pending_apps'}); });
-            Object.entries(live).forEach(([k,v]) => { if(v.developerId === currentUser.uid) myItems.push({...v, id:k, dbPath:'games'}); });
+            
+            Object.entries(pending).forEach(([k,v]) => {
+                if(v.developerId === currentUser.uid) myItems.push({...v, id:k, dbPath:'pending_apps'});
+            });
+            Object.entries(live).forEach(([k,v]) => {
+                if(v.developerId === currentUser.uid) myItems.push({...v, id:k, dbPath:'games'});
+            });
 
             if(myItems.length === 0) { list.innerHTML = "<p>You haven't submitted any apps yet.</p>"; return; }
 
             myItems.forEach(app => {
                 myAppsData[app.id] = app;
+                
                 let statusClass = 'status-pending';
                 if(app.status === 'Live') statusClass = 'status-live';
                 if(app.status === 'Rejected') statusClass = 'status-rejected';
@@ -301,7 +286,7 @@
             });
         }
 
-        // --- FIXED SUBMIT LOGIC ---
+        // --- FORM LOGIC ---
         const compress=(f)=>new Promise(r=>{const rd=new FileReader();rd.readAsDataURL(f);rd.onload=e=>{const i=new Image();i.src=e.target.result;i.onload=()=>{const c=document.createElement('canvas'),s=500/i.width;c.width=500;c.height=i.height*s;c.getContext('2d').drawImage(i,0,0,c.width,c.height);r(c.toDataURL('image/jpeg',0.7))}}});
         
         window.handleIcon = async (i) => { if(i.files[0]){const b=await compress(i.files[0]);document.getElementById('iconBase64').value=b;document.getElementById('iconPreview').src=b;document.getElementById('iconPreview').style.display='block';}};
@@ -309,10 +294,8 @@
         window.addScField = () => { const d=document.createElement('div'); d.innerHTML=`<input type="file" class="sc-file" accept="image/*" onchange="window.handleSc(this)" style="margin-bottom:5px">`; document.getElementById('sc-container').appendChild(d); };
         window.handleSc = async (i) => { if(i.files[0]){const b=await compress(i.files[0]);i.setAttribute('data-b64', b); i.style.border="1px solid #00d4ff";}};
 
+        // SUBMIT / UPDATE
         window.submitForReview = () => {
-            const btn = document.getElementById('btn-action');
-            btn.innerText = "Submitting...";
-
             const data = {
                 name: document.getElementById('appName').value,
                 type: document.getElementById('appType').value,
@@ -337,19 +320,32 @@
                 data.screenshots = myAppsData[editingId].screenshots;
             }
 
-            if(!data.name || !data.download) { btn.innerText = "SUBMIT FOR REVIEW"; return alert("Missing required fields"); }
+            if(!data.name || !data.download) return alert("Missing required fields");
 
             if(editingId) {
-                data.originalId = editingId; 
-                data.requestType = "Update";
+                // If editing, always reset status to "Pending" so Admin can review again
                 data.status = "Pending";
-                // If editing live app, send update request to pending_apps
-                push(ref(db, 'pending_apps'), data).then(() => {
-                    alert("Update submitted for review!");
-                    window.resetForm();
-                    loadMyApps();
-                });
+                // If it was previously rejected (in pending_apps), update it. 
+                // If it was Live, we create a new update request in pending_apps.
+                // Simplified: We always push to pending_apps for review.
+                if(editingPath === 'games') {
+                    data.originalId = editingId;
+                    data.requestType = "Update";
+                    push(ref(db, 'pending_apps'), data).then(() => {
+                        alert("Update submitted for review!");
+                        window.resetForm();
+                        loadMyApps();
+                    });
+                } else {
+                    // Updating an existing pending or rejected request
+                    update(ref(db, `pending_apps/${editingId}`), data).then(() => {
+                        alert("Submission updated & sent for review!");
+                        window.resetForm();
+                        loadMyApps();
+                    });
+                }
             } else {
+                // NEW SUBMISSION
                 data.status = "Pending";
                 push(ref(db, 'pending_apps'), data).then(() => {
                     alert("Submitted for Review!");
